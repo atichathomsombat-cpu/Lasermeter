@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<title>ตลับเมตรเลเซอร์</title>
+<style>
+:root{--bg:#f4f6f5;--card:#fff;--ink:#14231f;--mut:#5b6b66;--pri:#0f766e;--onpri:#fff;--line:#d8e0dd;--bad:#b42318}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1715;--card:#18231f;--ink:#e8f1ee;--mut:#93a39d;--pri:#2dd4bf;--onpri:#06201b;--line:#2a3a35;--bad:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif;font-size:16px;padding-bottom:env(safe-area-inset-bottom)}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px}
+h1{font-size:18px;margin:0}
+h2{font-size:15px;margin:0 0 8px}
+#status{padding:0 16px 8px;font-size:13px;color:var(--mut)}
+main{padding:0 16px 24px;display:grid;gap:12px;max-width:560px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+.center{text-align:center}
+#big{font-size:48px;font-weight:700;line-height:1.1;margin:4px 0 10px;font-variant-numeric:tabular-nums}
+.row{display:flex;gap:8px;margin-top:8px}
+.row>*{flex:1;min-width:0}
+input,select,button{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;min-height:44px}
+button{cursor:pointer}
+button.pri{background:var(--pri);color:var(--onpri);border-color:var(--pri);font-weight:600}
+button.bad{color:var(--bad)}
+.hint{font-size:13px;color:var(--mut);margin:6px 0}
+.item{display:grid;grid-template-columns:24px 1fr auto auto 40px;gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.item:first-child{border-top:0}
+.item .n{color:var(--mut);font-size:13px}
+.item .lb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item button{min-height:38px;padding:6px 8px}
+.item select{min-height:38px;padding:6px 4px;font-size:14px}
+canvas{width:100%;height:300px;display:block;border-radius:10px}
+#sum{font-size:14px;margin:8px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>ตลับเมตรเลเซอร์</h1>
+  <button id="btnConn" class="pri">เชื่อมต่อบอร์ด</button>
+</header>
+<div id="status">ยังไม่ได้เชื่อมต่อ (พิมพ์ค่าเองเพื่อทดลองได้)</div>
+<main>
+  <section class="card center">
+    <div id="big">--</div>
+    <div class="row">
+      <select id="unit"><option value="mm">มม.</option><option value="cm">ซม.</option><option value="m">ม.</option></select>
+      <input id="manual" type="number" inputmode="decimal" placeholder="พิมพ์ค่า (มม.) เพื่อทดลอง" style="flex:3">
+    </div>
+    <div class="row">
+      <input id="label" placeholder="ชื่อด้าน (ไม่ใส่ก็ได้)" style="flex:2">
+      <button id="btnRec" class="pri">บันทึกค่า</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>รายการที่บันทึก</h2>
+    <div id="list"></div>
+    <div class="row">
+      <button id="btnCsv">ส่งออก CSV</button>
+      <button id="btnClear" class="bad">ล้างทั้งหมด</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>รูปร่างจากค่าที่วัด</h2>
+    <canvas id="cv"></canvas>
+    <div id="sum"></div>
+    <p class="hint">วัดเรียงตามขอบห้องทีละด้าน แล้วเลือกว่าหลังด้านนั้นเลี้ยวซ้ายหรือขวา (ถือว่าเป็นมุมฉาก) แตะที่ตัวเลขในรายการเพื่อแก้ค่า</p>
+    <button id="btnPng" style="width:100%">บันทึกรูปเป็น PNG</button>
+  </section>
+</main>
+
+<script>
+const SVC = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+const CHR = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+const $ = id => document.getElementById(id);
+const el = {big:$('big'),unit:$('unit'),manual:$('manual'),label:$('label'),list:$('list'),cv:$('cv'),sum:$('sum'),status:$('status'),conn:$('btnConn')};
+
+let recs = [];      // {label, mm, turn:'R'|'L'|'S'}
+let cur = null;     // ค่าปัจจุบัน (มม.)
+let unit = 'cm';
+let dev = null, chr = null, retries = 0;
+
+try {
+  recs = JSON.parse(localStorage.getItem('lm_recs') || '[]');
+  unit = localStorage.getItem('lm_unit') || 'cm';
+} catch (e) {}
+el.unit.value = unit;
+
+function save() {
+  try { localStorage.setItem('lm_recs', JSON.stringify(recs)); localStorage.setItem('lm_unit', unit); } catch (e) {}
+}
+
+function fmt(mm) {
+  if (mm == null) return '--';
+  if (unit === 'mm') return Math.round(mm) + ' มม.';
+  if (unit === 'm') return (mm / 1000).toFixed(3) + ' ม.';
+  return (mm / 10).toFixed(1) + ' ซม.';
+}
+
+function setCur(v) {
+  cur = v;
+  el.big.textContent = fmt(v);
+}
+
+function addRecord(mm) {
+  const label = el.label.value.trim() || ('ด้าน ' + (recs.length + 1));
+  recs.push({label, mm: Math.round(mm), turn: 'R'});
+  el.label.value = '';
+  save(); renderList(); draw();
+  if (navigator.vibrate) navigator.vibrate(30);
+}
+
+function renderList() {
+  el.list.innerHTML = '';
+  if (!recs.length) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = 'ยังไม่มีค่า วัดแล้วกด "บันทึกค่า" หรือกดปุ่ม MEASURE ที่ตัวเครื่อง';
+    el.list.appendChild(p);
+    return;
+  }
+  recs.forEach((r, i) => {
+    const d = document.createElement('div');
+    d.className = 'item';
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = i + 1;
+    const lb = document.createElement('span'); lb.className = 'lb'; lb.textContent = r.label;
+    const val = document.createElement('button'); val.className = 'val'; val.textContent = fmt(r.mm);
+    val.onclick = () => {
+      const v = prompt('แก้ค่า (มม.)', r.mm);
+      if (v !== null && !isNaN(parseFloat(v)) && parseFloat(v) > 0) { r.mm = Math.round(parseFloat(v)); save(); renderList(); draw(); }
+    };
+    const t = document.createElement('select');
+    t.innerHTML = '<option value="R">เลี้ยวขวา ↱</option><option value="L">เลี้ยวซ้าย ↰</option><option value="S">ตรงต่อ ↑</option>';
+    t.value = r.turn;
+    t.onchange = () => { r.turn = t.value; save(); draw(); };
+    const x = document.createElement('button'); x.textContent = '✕'; x.className = 'bad';
+    x.onclick = () => { recs.splice(i, 1); save(); renderList(); draw(); };
+    d.append(n, lb, val, t, x);
+    el.list.appendChild(d);
+  });
+}
+
+// ---------- วาดรูป ----------
+function points() {
+  let x = 0, y = 0, h = 0;
+  const p = [[0, 0]];
+  recs.forEach(r => {
+    x += r.mm * Math.cos(h * Math.PI / 180);
+    y += r.mm * Math.sin(h * Math.PI / 180);
+    p.push([x, y]);
+    h += r.turn === 'R' ? 90 : r.turn === 'L' ? -90 : 0;
+  });
+  return p;
+}
+
+function draw() {
+  const cv = el.cv, dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || 320, H = 300;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const cs = getComputedStyle(document.documentElement);
+  const ink = cs.getPropertyValue('--ink').trim(), pri = cs.getPropertyValue('--pri').trim();
+  const mut = cs.getPropertyValue('--mut').trim(), card = cs.getPropertyValue('--card').trim();
+  g.fillStyle = card; g.fillRect(0, 0, W, H);
+
+  if (!recs.length) {
+    g.fillStyle = mut; g.font = '14px sans-serif'; g.textAlign = 'center';
+    g.fillText('บันทึกค่าแล้วรูปจะแสดงที่นี่', W / 2, H / 2);
+    el.sum.textContent = '';
+    return;
+  }
+
+  const P = points();
+  const xs = P.map(a => a[0]), ys = P.map(a => a[1]);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const pad = 52, bw = Math.max(maxx - minx, 1), bh = Math.max(maxy - miny, 1);
+  const s = Math.min((W - 2 * pad) / bw, (H - 2 * pad) / bh);
+  const ox = (W - bw * s) / 2 - minx * s, oy = (H - bh * s) / 2 - miny * s;
+  const Q = P.map(a => [a[0] * s + ox, a[1] * s + oy]);
+  const cx = Q.reduce((a, b) => a + b[0], 0) / Q.length;
+  const cy = Q.reduce((a, b) => a + b[1], 0) / Q.length;
+
+  // เส้นรูปร่าง
+  g.lineWidth = 3; g.strokeStyle = pri; g.lineJoin = 'round'; g.lineCap = 'round';
+  g.beginPath();
+  Q.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]));
+  g.stroke();
+
+  // เส้นบอกขนาด
+  recs.forEach((r, i) => {
+    const a = Q[i], b = Q[i + 1];
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    if (L < 1) return;
+    let nx = -dy / L, ny = dx / L;
+    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+    if ((mx - cx) * nx + (my - cy) * ny < 0) { nx = -nx; ny = -ny; }
+    const o = 16;
+    g.lineWidth = 1; g.strokeStyle = mut;
+    g.beginPath();
+    g.moveTo(a[0] + nx * 4, a[1] + ny * 4); g.lineTo(a[0] + nx * (o + 4), a[1] + ny * (o + 4));
+    g.moveTo(b[0] + nx * 4, b[1] + ny * 4); g.lineTo(b[0] + nx * (o + 4), b[1] + ny * (o + 4));
+    g.moveTo(a[0] + nx * o, a[1] + ny * o); g.lineTo(b[0] + nx * o, b[1] + ny * o);
+    g.stroke();
+    let ang = Math.atan2(dy, dx);
+    if (ang > Math.PI / 2 || ang < -Math.PI / 2) ang += Math.PI;
+    g.save();
+    g.translate(mx + nx * (o + 9), my + ny * (o + 9));
+    g.rotate(ang);
+    g.fillStyle = ink; g.font = '12px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(fmt(r.mm), 0, 0);
+    g.restore();
+  });
+
+  // จุดมุม + จุดเริ่ม
+  Q.forEach((q, i) => {
+    g.beginPath(); g.arc(q[0], q[1], i === 0 ? 5 : 3.5, 0, 7);
+    g.fillStyle = i === 0 ? '#16a34a' : pri; g.fill();
+  });
+
+  // สรุป
+  const per = recs.reduce((a, r) => a + r.mm, 0);
+  const last = P[P.length - 1], gap = Math.hypot(last[0], last[1]);
+  const closed = recs.length >= 3 && gap <= Math.max(30, per * 0.01);
+  let txt = 'รวมความยาว ' + fmt(per);
+  if (closed) {
+    const poly = P.slice(0, -1);
+    let a = 0;
+    poly.forEach((p, i) => { const q = poly[(i + 1) % poly.length]; a += p[0] * q[1] - q[0] * p[1]; });
+    txt += ' · ปิดรูปแล้ว พื้นที่ ≈ ' + (Math.abs(a) / 2 / 1e6).toFixed(2) + ' ตร.ม.';
+  } else if (recs.length >= 3) {
+    txt += ' · ยังไม่ปิดรูป (ห่างจุดเริ่ม ' + fmt(gap) + ')';
+  }
+  el.sum.textContent = txt;
+}
+
+// ---------- Bluetooth ----------
+function setStatus(t) { el.status.textContent = t; }
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    alert('เบราว์เซอร์นี้ไม่รองรับ Web Bluetooth\nให้ใช้ Chrome บนมือถือ Android (iPhone ไม่รองรับ)');
+    return;
+  }
+  try {
+    setStatus('กำลังค้นหาบอร์ด...');
+    dev = await navigator.bluetooth.requestDevice({
+      filters: [{namePrefix: 'LaserMeter'}],
+      optionalServices: [SVC]
+    });
+    dev.addEventListener('gattserverdisconnected', onDisc);
+    retries = 0;
+    await link();
+  } catch (e) {
+    setStatus('เชื่อมต่อไม่สำเร็จ: ' + (e.message || e));
+  }
+}
+
+async function link() {
+  setStatus('กำลังเชื่อมต่อ...');
+  const server = await dev.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  chr = await svc.getCharacteristic(CHR);
+  chr.addEventListener('characteristicvaluechanged', onData);
+  await chr.startNotifications();
+  setStatus('เชื่อมต่อแล้ว: ' + (dev.name || 'LaserMeter'));
+  el.conn.textContent = 'ตัดการเชื่อมต่อ';
+}
+
+function onData(e) {
+  const t = new TextDecoder().decode(e.target.value).trim();
+  const m = /^([DS]):(-?\d+)$/.exec(t);
+  if (!m) return;
+  const v = parseInt(m[2], 10);
+  if (v < 0) { setCur(null); return; }
+  setCur(v);
+  if (m[1] === 'S') addRecord(v);   // กดปุ่ม MEASURE ที่ตัวเครื่อง
+}
+
+function onDisc() {
+  el.conn.textContent = 'เชื่อมต่อบอร์ด';
+  setCur(null);
+  if (retries < 3) {
+    retries++;
+    setStatus('หลุดการเชื่อมต่อ กำลังต่อใหม่ (' + retries + '/3)...');
+    setTimeout(() => link().catch(onDisc), 1500);
+  } else {
+    setStatus('หลุดการเชื่อมต่อ กด "เชื่อมต่อบอร์ด" อีกครั้ง');
+  }
+}
+
+el.conn.onclick = () => {
+  if (dev && dev.gatt.connected) { retries = 99; dev.gatt.disconnect(); setStatus('ตัดการเชื่อมต่อแล้ว'); }
+  else connect();
+};
+
+// ---------- ปุ่มต่างๆ ----------
+$('btnRec').onclick = () => {
+  if (cur == null) { alert('ยังไม่มีค่าที่วัด\n(เชื่อมต่อบอร์ด หรือพิมพ์ค่าเองในช่อง)'); return; }
+  addRecord(cur);
+};
+el.manual.oninput = () => {
+  const v = parseFloat(el.manual.value);
+  setCur(isNaN(v) || v <= 0 ? null : v);
+};
+el.unit.onchange = () => { unit = el.unit.value; save(); setCur(cur); renderList(); draw(); };
+$('btnClear').onclick = () => {
+  if (recs.length && confirm('ล้างรายการทั้งหมด?')) { recs = []; save(); renderList(); draw(); }
+};
+
+function dl(name, blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+$('btnCsv').onclick = () => {
+  if (!recs.length) return;
+  const rows = ['ลำดับ,ชื่อ,มม.,เลี้ยว'];
+  recs.forEach((r, i) => rows.push([i + 1, '"' + r.label.replace(/"/g, '""') + '"', r.mm, r.turn === 'R' ? 'ขวา' : r.turn === 'L' ? 'ซ้าย' : 'ตรง'].join(',')));
+  dl('วัดระยะ.csv', new Blob(['\ufeff' + rows.join('\n')], {type: 'text/csv'}));
+};
+$('btnPng').onclick = () => { if (recs.length) el.cv.toBlob(b => dl('รูปร่าง.png', b)); };
+
+window.addEventListener('resize', draw);
+renderList(); setCur(null); draw();
+
+if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
